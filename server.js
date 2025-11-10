@@ -13,28 +13,33 @@ const WATCHLIST = ["TSLA", "META", "AAPL", "NVDA", "VOO", "AMZN", "PLTR", "GOOG"
 
 // ============= Helper to fetch daily prices =====================
 async function getDailyPrices(symbol) {
-    const { data } = await axios.get(BASE, {
-        params: {
-            function: "TIME_SERIES_DAILY",
-            symbol,
-            apikey: process.env.ALPHA_KEY
-        }
-    })
+    try {
+        const { data } = await axios.get(BASE, {
+            params: {
+                function: "TIME_SERIES_DAILY",
+                symbol,
+                apikey: process.env.ALPHA_KEY
+            }
+        })
 
-    const series = data["Time Series (Daily)"];
-    if (!series) {
-        console.log(`⚠️ No data for ${symbol}`);
+        const series = data["Time Series (Daily)"];
+        if (!series) {
+            console.log(`⚠️ No data for ${symbol}`);
+            return null;
+        }
+
+        const dates = Object.keys(series);
+        const latest = parseFloat(series[dates[0]]["4. close"])         //today
+        const prevDayClose = parseFloat(series[dates[1]]["4. close"])   //yesterday
+        const weekAgoClose = parseFloat(series[dates[5]]["4. close"])   //1week ago
+        const monthAgoClose = parseFloat(series[dates[20]]["4. close"]) //1month ago
+
+        return { latest, prevDayClose, weekAgoClose, monthAgoClose }
+
+    } catch (err) {
+        console.error(`❌ Error fetching ${symbol}:`, err.message);
         return null;
     }
-
-    const dates = Object.keys(series);
-    const latest = parseFloat(series[dates[0]]["4. close"])         //today
-    const prevDayClose = parseFloat(series[dates[1]["4. close"]])   //yesterday
-    const weekAgoClose = parseFloat(series[dates[5]]["4. close"])   //1week ago
-    const monthAgoClose = parseFloat(series[dates[20]]["4. close"]) //1month ago
-
-    return { latest, prevDayClose, weekAgoClose, monthAgoClose }
-
 
 }
 
@@ -58,7 +63,7 @@ async function sendDiscordAlert(symbol, message) {
 }
 
 async function checkStocks() {
-    for (const symbol in WATCHLIST) {
+    for (const symbol of WATCHLIST) {
         const prices = await getDailyPrices(symbol);
         if (!prices) continue;
 
@@ -77,4 +82,4 @@ async function checkStocks() {
     }
 }
 
-cron.schedule("00 8 * * 1-5", checkStocks);
+cron.schedule("0 8 * * 1-5", checkStocks);
