@@ -112,7 +112,6 @@ cron.schedule("0 9 1 * *", checkMonthly, { timezone: "Asia/Kuala_Lumpur" });
 
 app.get("/", (req, res) => res.send("🚀 Stock Alert Bot is running"));
 
-// Start server to keep Render happy
 app.listen(PORT, () => {
     console.log(`🚀 Server listening on port ${PORT}`);
     console.log("🚀 Stock Alert Cron Jobs Scheduled");
