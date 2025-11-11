@@ -1,13 +1,17 @@
+import express from "express";
 import axios from "axios";
 import dotenv from "dotenv";
 import cron from "node-cron";
 
 dotenv.config();
 
+const app = express();
+const PORT = process.env.PORT || 3000;
+
 const BASE = "https://www.alphavantage.co/query";
 const WATCHLIST = ["TSLA", "META", "AAPL", "NVDA", "VOO", "AMZN", "PLTR", "GOOG", "SHOP"];
 
-// Helper
+// Helper to fetch prices
 async function getDailyPrices(symbol) {
     try {
         const { data } = await axios.get(BASE, {
@@ -17,106 +21,99 @@ async function getDailyPrices(symbol) {
                 apikey: process.env.ALPHA_KEY,
             },
         });
-
         const series = data["Time Series (Daily)"];
         if (!series) {
             console.log(`⚠️ No data for ${symbol}`);
             return null;
         }
-
         const dates = Object.keys(series);
-        const latest = parseFloat(series[dates[0]]["4. close"]);
-        const prevDay = parseFloat(series[dates[1]]["4. close"]);
-        const weekAgo = parseFloat(series[dates[5]]["4. close"]);
-        const monthAgo = parseFloat(series[dates[20]]["4. close"]);
-
-        return { latest, prevDay, weekAgo, monthAgo };
+        return {
+            latest: parseFloat(series[dates[0]]["4. close"]),
+            prevDay: parseFloat(series[dates[1]]["4. close"]),
+            weekAgo: parseFloat(series[dates[5]]["4. close"]),
+            monthAgo: parseFloat(series[dates[20]]["4. close"]),
+        };
     } catch (err) {
         console.error(`❌ Error fetching ${symbol}:`, err.message);
         return null;
     }
 }
 
-// Discord alert
+// Send Discord alert
 async function sendDiscordAlert(symbol, message, color = 0xffa500) {
     try {
-        const payload = {
+        await axios.post(process.env.DISCORD_WEBHOOK, {
             username: "📉 Stock Alert Bot",
-            embeds: [
-                {
-                    title: `${symbol} Alert`,
-                    description: message,
-                    color,
-                    timestamp: new Date(),
-                },
-            ],
-        };
-        await axios.post(process.env.DISCORD_WEBHOOK, payload);
+            embeds: [{ title: `${symbol} Alert`, description: message, color, timestamp: new Date() }],
+        });
         console.log(`✅ Sent alert for ${symbol}: ${message}`);
     } catch (err) {
         console.error(`❌ Failed to send alert:`, err.message);
     }
 }
 
-// Daily
+// Daily check: alerts on >5% (warning) and >10% (alert) drops in a day
 async function checkDaily() {
     console.log("📅 Running Daily Check:", new Date().toLocaleString());
     for (const symbol of WATCHLIST) {
-        const p = await getDailyPrices(symbol);
-        if (!p) continue;
+        const prices = await getDailyPrices(symbol);
+        if (!prices) continue;
 
-        const dayChange = ((p.latest - p.prevDay) / p.prevDay) * 100;
+        const dayChange = ((prices.latest - prices.prevDay) / prices.prevDay) * 100;
 
-        if (dayChange <= -10)
+        if (dayChange <= -10) {
             await sendDiscordAlert(symbol, `${symbol} dropped ${dayChange.toFixed(2)}% today 🚨`, 0xff0000);
-        else if (dayChange <= -5)
+        } else if (dayChange <= -5) {
             await sendDiscordAlert(symbol, `${symbol} dropped ${dayChange.toFixed(2)}% today ⚠️`, 0xffa500);
+        }
     }
 }
 
-// Weekly Summary
+// Weekly check: alert if dropped >10% in the week
 async function checkWeekly() {
-    console.log("📊 Running Weekly Summary:", new Date().toLocaleString());
-    let summary = "📈 **Weekly Performance Summary**\n\n";
+    console.log("📅 Running Weekly Check:", new Date().toLocaleString());
     for (const symbol of WATCHLIST) {
-        const p = await getDailyPrices(symbol);
-        if (!p) continue;
+        const prices = await getDailyPrices(symbol);
+        if (!prices) continue;
 
-        const weekChange = ((p.latest - p.weekAgo) / p.weekAgo) * 100;
-        summary += `**${symbol}**: ${weekChange.toFixed(2)}%\n`;
+        const weekChange = ((prices.latest - prices.weekAgo) / prices.weekAgo) * 100;
+
+        if (weekChange <= -10) {
+            await sendDiscordAlert(symbol, `${symbol} dropped ${weekChange.toFixed(2)}% this week 🚨`, 0xff0000);
+        }
     }
-    await sendDiscordAlert("Overall", summary, 0x3498db);
 }
 
-// Monthly
+// Monthly check: warning at >10%, alert at >15% drop in the month
 async function checkMonthly() {
-    console.log("🗓️ Running Monthly Check:", new Date().toLocaleString());
+    console.log("📅 Running Monthly Check:", new Date().toLocaleString());
     for (const symbol of WATCHLIST) {
-        const p = await getDailyPrices(symbol);
-        if (!p) continue;
+        const prices = await getDailyPrices(symbol);
+        if (!prices) continue;
 
-        const monthChange = ((p.latest - p.monthAgo) / p.monthAgo) * 100;
+        const monthChange = ((prices.latest - prices.monthAgo) / prices.monthAgo) * 100;
 
-        if (monthChange <= -15)
+        if (monthChange <= -15) {
             await sendDiscordAlert(symbol, `${symbol} dropped ${monthChange.toFixed(2)}% this month 🚨`, 0xff0000);
-        else if (monthChange <= -10)
+        } else if (monthChange <= -10) {
             await sendDiscordAlert(symbol, `${symbol} dropped ${monthChange.toFixed(2)}% this month ⚠️`, 0xffa500);
+        }
     }
 }
 
-// 1️⃣ DAILY — after U.S. market closes (4 PM ET = 21:00 UTC)
-cron.schedule("0 21 * * 1-5", checkDaily, {
-    timezone: "UTC",
-});
+// Daily (US market close 4 PM ET = 21 UTC)
+cron.schedule("0 21 * * 1-5", checkDaily, { timezone: "UTC" });
 
-// 2️⃣ WEEKLY — every Sunday 9 AM Malaysia time
-cron.schedule("0 9 * * 0", checkWeekly, {
-    timezone: "Asia/Kuala_Lumpur",
-});
+// Weekly (Sunday 9 AM MYT)
+cron.schedule("0 9 * * 0", checkWeekly, { timezone: "Asia/Kuala_Lumpur" });
 
-// 3️⃣ MONTHLY — 1st day of each month 9 AM Malaysia time
-cron.schedule("0 9 1 * *", checkMonthly, {
-    timezone: "Asia/Kuala_Lumpur",
-});
+// Monthly (1st day 9 AM MYT)
+cron.schedule("0 9 1 * *", checkMonthly, { timezone: "Asia/Kuala_Lumpur" });
 
-console.log("🚀 Stock Alert Cron Jobs Scheduled");
+app.get("/", (req, res) => res.send("🚀 Stock Alert Bot is running"));
+
+// Start server to keep Render happy
+app.listen(PORT, () => {
+    console.log(`🚀 Server listening on port ${PORT}`);
+    console.log("🚀 Stock Alert Cron Jobs Scheduled");
+});
