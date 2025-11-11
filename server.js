@@ -104,9 +104,19 @@ async function checkMonthly() {
     }
 }
 
-// Schedule
-cron.schedule("0 21 * * 1-5", checkDaily); // After market close
-cron.schedule("0 1 * * 0", checkWeekly); // Sunday
-cron.schedule("0 8 1 * *", checkMonthly); // First day monthly
+// 1️⃣ DAILY — after U.S. market closes (4 PM ET = 21:00 UTC)
+cron.schedule("0 21 * * 1-5", checkDaily, {
+    timezone: "UTC",
+});
+
+// 2️⃣ WEEKLY — every Sunday 9 AM Malaysia time
+cron.schedule("0 9 * * 0", checkWeekly, {
+    timezone: "Asia/Kuala_Lumpur",
+});
+
+// 3️⃣ MONTHLY — 1st day of each month 9 AM Malaysia time
+cron.schedule("0 9 1 * *", checkMonthly, {
+    timezone: "Asia/Kuala_Lumpur",
+});
 
 console.log("🚀 Stock Alert Cron Jobs Scheduled");
