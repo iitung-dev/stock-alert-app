@@ -4,19 +4,20 @@ import cron from "node-cron";
 
 dotenv.config();
 
-const BASE = "https://www.alphavantage.co/query"
-const WATCHLIST = ["TSLA", "META", "AAPL", "NVDA", "VOO", "AMZN", "PLTR", "GOOG", "SHOP"]
+const BASE = "https://www.alphavantage.co/query";
+const WATCHLIST = ["TSLA", "META", "AAPL", "NVDA", "VOO", "AMZN", "PLTR", "GOOG", "SHOP"];
 
-// ============= Helper to fetch daily prices =====================
+// Helper
 async function getDailyPrices(symbol) {
     try {
         const { data } = await axios.get(BASE, {
             params: {
                 function: "TIME_SERIES_DAILY",
                 symbol,
-                apikey: process.env.ALPHA_KEY
-            }
-        })
+                apikey: process.env.ALPHA_KEY,
+            },
+        });
+
         const series = data["Time Series (Daily)"];
         if (!series) {
             console.log(`⚠️ No data for ${symbol}`);
@@ -24,22 +25,20 @@ async function getDailyPrices(symbol) {
         }
 
         const dates = Object.keys(series);
-        const latest = parseFloat(series[dates[0]]["4. close"])         //today
-        const prevDayClose = parseFloat(series[dates[1]]["4. close"])   //yesterday
-        const weekAgoClose = parseFloat(series[dates[5]]["4. close"])   //1week ago
-        const monthAgoClose = parseFloat(series[dates[20]]["4. close"]) //1month ago
+        const latest = parseFloat(series[dates[0]]["4. close"]);
+        const prevDay = parseFloat(series[dates[1]]["4. close"]);
+        const weekAgo = parseFloat(series[dates[5]]["4. close"]);
+        const monthAgo = parseFloat(series[dates[20]]["4. close"]);
 
-        return { latest, prevDayClose, weekAgoClose, monthAgoClose }
-
+        return { latest, prevDay, weekAgo, monthAgo };
     } catch (err) {
         console.error(`❌ Error fetching ${symbol}:`, err.message);
         return null;
     }
-
 }
 
-// ============== Send alert to Discord ============
-async function sendDiscordAlert(symbol, message) {
+// Discord alert
+async function sendDiscordAlert(symbol, message, color = 0xffa500) {
     try {
         const payload = {
             username: "📉 Stock Alert Bot",
@@ -47,53 +46,67 @@ async function sendDiscordAlert(symbol, message) {
                 {
                     title: `${symbol} Alert`,
                     description: message,
-                    color: 0xff0000,
+                    color,
                     timestamp: new Date(),
                 },
             ],
         };
-
         await axios.post(process.env.DISCORD_WEBHOOK, payload);
         console.log(`✅ Sent alert for ${symbol}: ${message}`);
-    } catch {
-        console.error(`Error: ❌ Failed to send alert for ${symbol}:`, err.message)
+    } catch (err) {
+        console.error(`❌ Failed to send alert:`, err.message);
     }
 }
 
-async function checkStocks() {
-  console.log("🔍 Checking stocks at", new Date().toLocaleString());
+// Daily
+async function checkDaily() {
+    console.log("📅 Running Daily Check:", new Date().toLocaleString());
+    for (const symbol of WATCHLIST) {
+        const p = await getDailyPrices(symbol);
+        if (!p) continue;
 
-  let allNoData = true;
+        const dayChange = ((p.latest - p.prevDay) / p.prevDay) * 100;
 
-  for (const symbol of WATCHLIST) {
-    const prices = await getDailyPrices(symbol);
-    if (!prices) continue;
-    allNoData = false;
-
-    const { latest, prevDayClose, weekAgoClose, monthAgoClose } = prices;
-
-    const dayChange = ((latest - prevDayClose) / prevDayClose) * 100;
-    const weekChange = ((latest - weekAgoClose) / weekAgoClose) * 100;
-    const monthChange = ((latest - monthAgoClose) / monthAgoClose) * 100;
-
-    if (dayChange <= -5)
-      await sendDiscordAlert(symbol, `${symbol} dropped ${dayChange.toFixed(2)}% today`);
-    if (weekChange <= -10)
-      await sendDiscordAlert(symbol, `${symbol} dropped ${weekChange.toFixed(2)}% this week`);
-    if (monthChange <= -10)
-      await sendDiscordAlert(symbol, `${symbol} dropped ${monthChange.toFixed(2)}% this month`);
-  }
-
-  if (allNoData) {
-    console.log("⚠️ No data found for all symbols — exiting gracefully.");
-    // only exit if not running as a cron service
-    if (!process.env.RENDER) process.exit(0);
-  } else {
-    console.log("✅ Stock check completed.");
-    process.exit(0)
-  }
+        if (dayChange <= -10)
+            await sendDiscordAlert(symbol, `${symbol} dropped ${dayChange.toFixed(2)}% today 🚨`, 0xff0000);
+        else if (dayChange <= -5)
+            await sendDiscordAlert(symbol, `${symbol} dropped ${dayChange.toFixed(2)}% today ⚠️`, 0xffa500);
+    }
 }
 
+// Weekly Summary
+async function checkWeekly() {
+    console.log("📊 Running Weekly Summary:", new Date().toLocaleString());
+    let summary = "📈 **Weekly Performance Summary**\n\n";
+    for (const symbol of WATCHLIST) {
+        const p = await getDailyPrices(symbol);
+        if (!p) continue;
 
-cron.schedule("0 8 * * 1-5", checkStocks);
-await checkStocks();
+        const weekChange = ((p.latest - p.weekAgo) / p.weekAgo) * 100;
+        summary += `**${symbol}**: ${weekChange.toFixed(2)}%\n`;
+    }
+    await sendDiscordAlert("Overall", summary, 0x3498db);
+}
+
+// Monthly
+async function checkMonthly() {
+    console.log("🗓️ Running Monthly Check:", new Date().toLocaleString());
+    for (const symbol of WATCHLIST) {
+        const p = await getDailyPrices(symbol);
+        if (!p) continue;
+
+        const monthChange = ((p.latest - p.monthAgo) / p.monthAgo) * 100;
+
+        if (monthChange <= -15)
+            await sendDiscordAlert(symbol, `${symbol} dropped ${monthChange.toFixed(2)}% this month 🚨`, 0xff0000);
+        else if (monthChange <= -10)
+            await sendDiscordAlert(symbol, `${symbol} dropped ${monthChange.toFixed(2)}% this month ⚠️`, 0xffa500);
+    }
+}
+
+// Schedule
+cron.schedule("0 21 * * 1-5", checkDaily); // After market close
+cron.schedule("0 1 * * 0", checkWeekly); // Sunday
+cron.schedule("0 8 1 * *", checkMonthly); // First day monthly
+
+console.log("🚀 Stock Alert Cron Jobs Scheduled");
